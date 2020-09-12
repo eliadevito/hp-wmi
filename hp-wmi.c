@@ -568,7 +568,6 @@ static struct attribute *hp_wmi_attrs[] = {
 	&dev_attr_dock.attr,
 	&dev_attr_tablet.attr,
 	&dev_attr_postcode.attr,
-	&dev_attr_thermal_policy.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(hp_wmi);
@@ -917,16 +916,19 @@ fail:
 	return err;
 }
 
-static int thermal_profile_setup(struct platform_device *dev)
+static int thermal_policy_setup(struct platform_device *device)
 {
 	int err, tp;
 
 	tp = hp_wmi_read_int(HPWMI_THERMAL_POLICY_QUERY);
 	if (tp < 0)
 		return tp;
-		
-	err = hp_wmi_perform_query(HPWMI_THERMAL_POLICY_QUERY, HPWMI_WRITE, &tp, sizeof(tp), 0);
 	
+	err = hp_wmi_perform_query(HPWMI_THERMAL_POLICY_QUERY, HPWMI_WRITE, &tp, sizeof(tp), 0);
+	if (err)
+		return err;
+	
+	err = device_create_file(&device->dev, &dev_attr_thermal_policy);
 	if (err)
 		return err;
 	
@@ -944,7 +946,7 @@ static int __init hp_wmi_bios_setup(struct platform_device *device)
 	if (hp_wmi_rfkill_setup(device))
 		hp_wmi_rfkill2_setup(device);
 	
-	thermal_profile_setup(device);
+	thermal_policy_setup(device);
 	
 	return 0;
 }
@@ -953,7 +955,9 @@ static int __init hp_wmi_bios_setup(struct platform_device *device)
 static int __exit hp_wmi_bios_remove(struct platform_device *device)
 {
 	int i;
-
+	
+	device_remove_file(&device->dev, &dev_attr_thermal_policy);
+	
 	for (i = 0; i < rfkill2_count; i++) {
 		rfkill_unregister(rfkill2[i].rfkill);
 		rfkill_destroy(rfkill2[i].rfkill);

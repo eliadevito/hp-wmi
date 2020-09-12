@@ -81,6 +81,7 @@ enum hp_wmi_commandtype {
 	HPWMI_FEATURE2_QUERY		= 0x0d,
 	HPWMI_WIRELESS2_QUERY		= 0x1b,
 	HPWMI_POSTCODEERROR_QUERY	= 0x2a,
+	HPWMI_THERMAL_POLICY_QUERY	= 0x4c
 };
 
 enum hp_wmi_command {
@@ -112,6 +113,12 @@ enum hp_wireless2_bits {
 	HPWMI_POWER_BIOS	= 0x04,
 	HPWMI_POWER_HARD	= 0x08,
 	HPWMI_POWER_FW_OR_HW	= HPWMI_POWER_BIOS | HPWMI_POWER_HARD,
+};
+
+enum hp_thermal_policy {
+	HP_THERMAL_POLICY_PERFORMANCE	= 0x00,
+	HP_THERMAL_POLICY_DEFAULT		= 0x01,
+	HP_THERMAL_POLICY_COOL			= 0x02
 };
 
 #define IS_HWBLOCKED(x) ((x & HPWMI_POWER_FW_OR_HW) != HPWMI_POWER_FW_OR_HW)
@@ -458,6 +465,31 @@ static ssize_t postcode_show(struct device *dev, struct device_attribute *attr,
 	return sprintf(buf, "0x%x\n", value);
 }
 
+static ssize_t thermal_policy_show(struct device *dev, struct device_attribute *attr,
+			     char *buf)
+{
+	/* Get the current thermal policy */
+	int value = hp_wmi_read_int(HPWMI_THERMAL_POLICY_QUERY);
+	if (value < 0)
+		return value;
+	
+	switch(value)
+	{
+		case HP_THERMAL_POLICY_PERFORMANCE:
+			return sprintf(buf, "Performance (%x)\n", value);
+			break;
+		case HP_THERMAL_POLICY_DEFAULT:
+			return sprintf(buf, "Default (%x)\n", value);
+			break;
+		case HP_THERMAL_POLICY_COOL:
+			return sprintf(buf, "Cool (%x)\n", value);
+			break;
+		default:
+			return sprintf(buf, "Unknown (%x)\n", value);
+			break;
+	}
+}
+
 static ssize_t als_store(struct device *dev, struct device_attribute *attr,
 			 const char *buf, size_t count)
 {
@@ -499,12 +531,35 @@ static ssize_t postcode_store(struct device *dev, struct device_attribute *attr,
 	return count;
 }
 
+static ssize_t thermal_policy_store(struct device *dev, struct device_attribute *attr,
+			      const char *buf, size_t count)
+{
+	u32 tmp;
+	int ret;
+
+	ret = kstrtou32(buf, 10, &tmp);
+	if (ret)
+		return ret;
+	
+	if (tmp < HP_THERMAL_POLICY_PERFORMANCE || tmp > HP_THERMAL_POLICY_COOL)
+		return -EINVAL;
+	
+	/* Set thermal policy */
+	ret = hp_wmi_perform_query(HPWMI_THERMAL_POLICY_QUERY, HPWMI_WRITE, &tmp,
+				       sizeof(tmp), sizeof(tmp));
+	if (ret)
+		return ret < 0 ? ret : -EINVAL;
+
+	return count;
+}
+
 static DEVICE_ATTR_RO(display);
 static DEVICE_ATTR_RO(hddtemp);
 static DEVICE_ATTR_RW(als);
 static DEVICE_ATTR_RO(dock);
 static DEVICE_ATTR_RO(tablet);
 static DEVICE_ATTR_RW(postcode);
+static DEVICE_ATTR_RW(thermal_policy);
 
 static struct attribute *hp_wmi_attrs[] = {
 	&dev_attr_display.attr,
@@ -513,6 +568,7 @@ static struct attribute *hp_wmi_attrs[] = {
 	&dev_attr_dock.attr,
 	&dev_attr_tablet.attr,
 	&dev_attr_postcode.attr,
+	&dev_attr_thermal_policy.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(hp_wmi);
@@ -861,6 +917,22 @@ fail:
 	return err;
 }
 
+static int thermal_profile_setup(struct platform_device *dev)
+{
+	int err, tp;
+
+	tp = hp_wmi_read_int(HPWMI_THERMAL_POLICY_QUERY);
+	if (tp < 0)
+		return tp;
+		
+	err = hp_wmi_perform_query(HPWMI_THERMAL_POLICY_QUERY, HPWMI_WRITE, &tp, sizeof(tp), 0);
+	
+	if (err)
+		return err;
+	
+	return 0;
+}
+
 static int __init hp_wmi_bios_setup(struct platform_device *device)
 {
 	/* clear detected rfkill devices */
@@ -871,9 +943,12 @@ static int __init hp_wmi_bios_setup(struct platform_device *device)
 
 	if (hp_wmi_rfkill_setup(device))
 		hp_wmi_rfkill2_setup(device);
-
+	
+	thermal_profile_setup(device);
+	
 	return 0;
 }
+
 
 static int __exit hp_wmi_bios_remove(struct platform_device *device)
 {
@@ -978,7 +1053,7 @@ static int __init hp_wmi_init(void)
 		if (err)
 			goto err_unregister_device;
 	}
-
+	
 	return 0;
 
 err_unregister_device:
